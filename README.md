@@ -26,7 +26,7 @@ Call `discord_run(token, intents, on_gateway)` to discover and connect to the Ga
 
 `discord_register_command(token, application_id, guild_id, discord_command(name, description))` registers one guild slash command. IDs remain strings. `discord_request`, registration, response, and connection functions return ordinary `Result` values. `DiscordError` contains a secret-free `message`, HTTP `status` (zero for non-HTTP errors), and `retry_ms` for 429 responses. Successful empty HTTP bodies become JSON null.
 
-Imports share Nerv's global namespace, so SDK declarations use `discord_` prefixes. `discord_step` is the deterministic Gateway state transition used by the transport adapter. Callback state contains the bot token and session information: never print or persist it in logs.
+The current compiler supports qualified module references; unique unqualified references remain compatible. SDK declarations retain `discord_` prefixes for compatibility. `discord_step` is the deterministic Gateway state transition used by the transport adapter. Callback state contains the bot token and session information: never print or persist it in logs.
 
 ## Behavior
 
