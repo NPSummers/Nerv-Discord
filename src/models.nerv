@@ -24,7 +24,8 @@ fn discord_command(name: string, description: string) -> Json
     discord_put(discord_put(discord_put(json_object(), "name", json_string(name)), "description", json_string(description)), "type", json_integer(1))
 
 fn discord_message(content: string) -> Json
-    let data = discord_put(json_object(), "content", json_string(content))
+    let mentions = discord_put(json_object(), "parse", json_array())
+    let data = discord_put(discord_put(json_object(), "content", json_string(content)), "allowed_mentions", mentions)
     discord_put(discord_put(json_object(), "type", json_integer(4)), "data", data)
 
 fn discord_decimal(value: string) -> bool
