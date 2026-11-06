@@ -1,0 +1,18 @@
+version = 1
+
+[[package]]
+checksum = "ac0e6713bbeb981ce8ba50d14260a726fb9fcad44a8aaf52ceb2de3fa68b3dfb"
+manifest = "../../Nerv.toml"
+name = "nerv_discord"
+version = "0.1.0"
+
+[package.dependencies]
+
+[[package]]
+checksum = "496deeefa519830e72e726e04c6277ce67ab758f80f11372b654c0986e2a6895"
+manifest = "Nerv.toml"
+name = "discord_mock_client"
+version = "0.1.0"
+
+[package.dependencies]
+discord = "../../Nerv.toml"

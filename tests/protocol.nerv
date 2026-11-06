@@ -1,0 +1,64 @@
+import nerv_discord
+
+fn discord_test_payload(op: i64, data: Json) -> string
+    json_serialize(discord_envelope(op, data))
+
+fn discord_test_hello() -> DiscordStep
+    let hello = discord_put(json_object(), "heartbeat_interval", json_integer(1000))
+    discord_step(discord_state("dummy-token", 0), "text", discord_test_payload(10, hello), 100, 100)
+
+test "hello identify heartbeat ACK and missed ACK"
+    let hello = discord_test_hello()
+    assert(json_i64(discord_field(hello.outbound, "op"), -1) == 2)
+    assert(not hello.close)
+    let beat = discord_step(hello.state, "timeout", "", 200, 0)
+    assert(json_i64(discord_field(beat.outbound, "op"), -1) == 1)
+    assert_string_equal(json_kind(discord_field(beat.outbound, "d")), "null")
+    let busy = discord_step(beat.state, "ping", "", 1200, 0)
+    assert(busy.close)
+    let ack = discord_step(beat.state, "text", discord_test_payload(11, json_null()), 250, 0)
+    let next = discord_step(ack.state, "timeout", "", 1200, 0)
+    assert(not next.close)
+    assert(json_i64(discord_field(next.outbound, "op"), -1) == 1)
+
+test "READY records string session and sequence for Resume"
+    let hello = discord_test_hello()
+    let data = discord_put(discord_put(json_object(), "session_id", json_string("session")), "resume_gateway_url", json_string("wss://gateway.discord.gg"))
+    let payload = discord_put(discord_put(discord_envelope(0, data), "t", json_string("READY")), "s", json_integer(42))
+    let ready = discord_step(hello.state, "text", json_serialize(payload), 150, 0)
+    assert_string_equal(discord_text(ready.state, "session"), "session")
+    let resume = discord_authenticate(ready.state)
+    assert(json_i64(discord_field(resume, "op"), -1) == 6)
+    assert(json_i64(discord_field(discord_field(resume, "d"), "seq"), -1) == 42)
+    let invalid = discord_step(ready.state, "text", discord_test_payload(9, json_boolean(false)), 160, 0)
+    assert(invalid.close)
+    assert_string_equal(discord_text(invalid.state, "session"), "")
+    let resumable = discord_step(ready.state, "text", discord_test_payload(9, json_boolean(true)), 160, 0)
+    assert_string_equal(discord_text(resumable.state, "session"), "session")
+
+test "fatal close malformed JSON and missing Hello"
+    let close = discord_step(discord_state("dummy", 0), "close", "{\"code\":4004,\"reason\":\"secret\"}", 0, 0)
+    assert(close.close)
+    assert(json_bool(discord_field(close.state, "fatal"), false))
+    let bad = discord_step(discord_state("dummy", 0), "text", "{invalid}", 0, 0)
+    assert(bad.close)
+    let opened = discord_step(discord_state("dummy", 0), "open", "", 0, 0)
+    let timeout = discord_step(opened.state, "timeout", "", 10000, 0)
+    assert(timeout.close)
+
+test "JSON payloads escape content and keep snowflakes as strings"
+    let message = discord_message("hello \"world\"\nnext")
+    let parsed = result_or(json_parse(json_serialize(message)), json_null())
+    assert_string_equal(discord_text(discord_field(parsed, "data"), "content"), "hello \"world\"\nnext")
+    assert_string_equal(json_kind(json_string("18446744073709551615")), "string")
+
+test "REST status and retry information survive classification"
+    let response = HttpResponse { status: 429, headers:json_array(), body: "{\"retry_after\":1.25,\"global\":true}" }
+    let limited = match discord_response(response)
+        Ok(value) => false
+        Err(error) => error.status == 429 and error.retry_ms == 1251
+    assert(limited)
+    let forbidden = match discord_response(HttpResponse { status: 403, headers:json_array(), body: "secret" })
+        Ok(value) => false
+        Err(error) => error.status == 403 and string_equal(error.message, "Discord REST request rejected")
+    assert(forbidden)

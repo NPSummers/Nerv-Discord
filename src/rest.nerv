@@ -1,0 +1,55 @@
+import models
+
+fn discord_retry_ms(response: HttpResponse) -> i64
+    let body = result_or(json_parse(response.body), json_null())
+    let header = option_or(http_header(response, "Retry-After"), "0")
+    let seconds = json_f64(discord_field(body, "retry_after"), json_f64(result_or(json_parse(header), json_null()), 0.0))
+    if seconds > 0.0 and seconds <= 300.0
+        i64(seconds * 1000.0) + 1
+    else
+        300000
+
+fn discord_response(response: HttpResponse) -> Result<Json, DiscordError>
+    if response.status >= 200 and response.status < 300
+        if nerv.string.len(response.body) == 0
+            Ok(json_null())
+        else
+            match json_parse(response.body)
+                Ok(value) => Ok(value)
+                Err(error) => Err(DiscordError { message: "Invalid Discord JSON response", status: response.status, retry_ms: 0 })
+    else
+        let retry = if response.status == 429
+            discord_retry_ms(response)
+        else
+            0
+        Err(DiscordError { message: "Discord REST request rejected", status: response.status, retry_ms: retry })
+
+fn discord_request(method: string, route: string, token: string, body: Json, timeout: i64) -> Result<Json, DiscordError>
+    let url = nerv.string.concat("https://discord.com/api/v10", route)
+    let headers = ["Authorization", nerv.string.concat("Bot ", token), "Content-Type", "application/json", "User-Agent", "DiscordBot (https://github.com/NPSummers/Nerv-v2, 0.1.0)"]
+    let request_body = if string_equal(method, "GET")
+        ""
+    else
+        json_serialize(body)
+    match http_request(method, url, headers, request_body, timeout)
+        Ok(response) => discord_response(response)
+        Err(error) => Err(DiscordError { message: "Discord transport request failed", status: 0, retry_ms: 0 })
+
+fn discord_register_command(token: string, application: string, guild: string, command: Json) -> Result<Json, DiscordError>
+    if discord_decimal(application) and discord_decimal(guild)
+        let route = nerv.string.concat(nerv.string.concat(nerv.string.concat("/applications/", application), "/guilds/"), nerv.string.concat(guild, "/commands"))
+        discord_request("POST", route, token, command, 10000)
+    else
+        Err(DiscordError { message: "Invalid application or guild ID", status: 0, retry_ms: 0 })
+
+fn discord_respond(interaction: Json, response: Json) -> Result<Json, DiscordError>
+    let id = discord_text(interaction, "id")
+    let token = discord_text(interaction, "token")
+    if discord_decimal(id) and discord_route_token(token)
+        let route = nerv.string.concat(nerv.string.concat(nerv.string.concat("/interactions/", id), "/"), nerv.string.concat(token, "/callback"))
+        let headers = ["Content-Type", "application/json", "User-Agent", "DiscordBot (https://github.com/NPSummers/Nerv-v2, 0.1.0)"]
+        match http_request("POST", nerv.string.concat("https://discord.com/api/v10", route), headers, json_serialize(response), 1500)
+            Ok(value) => discord_response(value)
+            Err(error) => Err(DiscordError { message: "Interaction response transport failure", status: 0, retry_ms: 0 })
+    else
+        Err(DiscordError { message: "Invalid interaction credentials", status: 0, retry_ms: 0 })

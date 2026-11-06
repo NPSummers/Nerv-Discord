@@ -1,0 +1,226 @@
+import rest
+
+struct DiscordStep
+    state: Json
+    outbound: Json
+    interaction: Json
+    close: bool
+
+fn discord_state(token: string, intents: i64) -> Json
+    let state = discord_put(discord_put(json_object(), "token", json_string(token)), "intents", json_integer(intents))
+    discord_put(discord_put(state, "seq", json_null()), "session", json_string(""))
+
+fn discord_identify(state: Json) -> Json
+    let properties = discord_put(discord_put(discord_put(json_object(), "os", json_string("windows")), "browser", json_string("Nerv-Discord")), "device", json_string("Nerv-Discord"))
+    let data = discord_put(discord_put(discord_put(json_object(), "token", discord_field(state, "token")), "intents", discord_field(state, "intents")), "properties", properties)
+    discord_envelope(2, data)
+
+fn discord_authenticate(state: Json) -> Json
+    if nerv.string.len(discord_text(state, "session")) > 0
+        let data = discord_put(discord_put(discord_put(json_object(), "token", discord_field(state, "token")), "session_id", discord_field(state, "session")), "seq", discord_field(state, "seq"))
+        discord_envelope(6, data)
+    else
+        discord_identify(state)
+
+fn discord_fatal_close(code: i64) -> bool
+    code == 4004 or (code >= 4010 and code <= 4014)
+
+fn discord_step(previous: Json, kind: string, text: string, now: i64, jitter: i64) -> DiscordStep
+    let mut state = previous
+    let mut outbound = json_null()
+    let mut interaction = json_null()
+    let mut close = false
+    if string_equal(kind, "open")
+        state = discord_put(state, "hello_deadline", json_integer(now + 10000))
+    else
+        assert(true)
+    if string_equal(kind, "text")
+        let payload = result_or(json_parse(text), json_null())
+        let op = json_i64(discord_field(payload, "op"), -1)
+        let data = discord_field(payload, "d")
+        if op == 10
+            let interval = json_i64(discord_field(data, "heartbeat_interval"), 0)
+            if interval > 0 and interval <= 300000 and json_i64(discord_field(state, "interval"), 0) == 0
+                state = discord_put(state, "interval", json_integer(interval))
+                state = discord_put(state, "next", json_integer(now + jitter % interval))
+                state = discord_put(state, "ack", json_boolean(false))
+                outbound = discord_authenticate(state)
+            else
+                close = true
+        else
+            if op == 11
+                state = discord_put(state, "ack", json_boolean(false))
+            else
+                if op == 1
+                    outbound = discord_envelope(1, discord_field(state, "seq"))
+                    state = discord_put(state, "ack", json_boolean(true))
+                    state = discord_put(state, "next", json_integer(now + json_i64(discord_field(state, "interval"), 0)))
+                else
+                    if op == 7 or op == 9
+                        close = true
+                        if op == 9
+                            state = discord_put(state, "retry_delay", json_integer(1000 + jitter % 4001))
+                            if not json_bool(data, false)
+                                state = discord_put(state, "session", json_string(""))
+                                state = discord_put(state, "seq", json_null())
+                            else
+                                assert(true)
+                        else
+                            assert(true)
+                    else
+                        if op == 0
+                            let seq = discord_field(payload, "s")
+                            if json_i64(seq, -1) >= 0
+                                state = discord_put(state, "seq", seq)
+                            else
+                                assert(true)
+                            let event = discord_text(payload, "t")
+                            if json_i64(seq, -1) < 0 or nerv.string.len(event) == 0 or not string_equal(json_kind(data), "object")
+                                close = true
+                            else
+                                assert(true)
+                            if string_equal(event, "READY")
+                                state = discord_put(state, "session", discord_field(data, "session_id"))
+                                state = discord_put(state, "resume_url", discord_field(data, "resume_gateway_url"))
+                                state = discord_put(state, "ready", json_boolean(true))
+                                if nerv.string.len(discord_text(state, "session")) == 0 or nerv.string.starts_with(discord_text(state, "resume_url"), "wss://") == 0
+                                    close = true
+                                else
+                                    assert(true)
+                            else
+                                assert(true)
+                            if string_equal(event, "RESUMED")
+                                state = discord_put(state, "ready", json_boolean(true))
+                            else
+                                assert(true)
+                            if string_equal(event, "INTERACTION_CREATE")
+                                interaction = data
+                            else
+                                assert(true)
+                        else
+                            if op < 0
+                                close = true
+                            else
+                                assert(true)
+    else
+        assert(true)
+    if string_equal(kind, "close")
+        let payload = result_or(json_parse(text), json_null())
+        let code = json_i64(discord_field(payload, "code"), 0)
+        state = discord_put(state, "fatal", json_boolean(discord_fatal_close(code)))
+        state = discord_put(state, "close_code", json_integer(code))
+        if code == 4007 or code == 4009 or code == 1000 or code == 1001
+            state = discord_put(state, "session", json_string(""))
+            state = discord_put(state, "seq", json_null())
+        else
+            assert(true)
+        close = true
+    else
+        assert(true)
+    if string_equal(kind, "binary")
+        close = true
+    else
+        assert(true)
+    let interval = json_i64(discord_field(state, "interval"), 0)
+    if interval == 0 and now >= json_i64(discord_field(state, "hello_deadline"), now + 1)
+        close = true
+    else
+        assert(true)
+    if not close and interval > 0 and now >= json_i64(discord_field(state, "next"), 0)
+        if json_bool(discord_field(state, "ack"), false)
+            close = true
+        else
+            if string_equal(json_kind(outbound), "null")
+                outbound = discord_envelope(1, discord_field(state, "seq"))
+                state = discord_put(state, "ack", json_boolean(true))
+                state = discord_put(state, "next", json_integer(now + interval))
+            else
+                assert(true)
+    else
+        assert(true)
+    DiscordStep { state: state, outbound: outbound, interaction: interaction, close: close }
+
+fn discord_handle(handle: i64, kind: string, text: string, bytes: []u8, previous: string, command:fn(Json) -> string) -> []string
+    let state = result_or(json_parse(previous), json_null())
+    let mut step = discord_step(state, kind, text, monotonic_ms(), random_below(1000000))
+    if not string_equal(json_kind(step.outbound), "null")
+        let payload = json_serialize(step.outbound)
+        if nerv.string.len(payload) <= 4096
+            step.close = match websocket_send(handle, payload)
+                Ok(sent) => false
+                Err(error) => true
+        else
+            step.close = true
+    else
+        assert(true)
+    if not string_equal(json_kind(step.interaction), "null") and not step.close
+        let response = command(step.interaction)
+        if nerv.string.len(response) > 0
+            match discord_respond(step.interaction, discord_message(response))
+                Ok(value) => assert(true)
+                Err(error) => stderr(error.message)
+        else
+            assert(true)
+    else
+        assert(true)
+    let action = if step.close
+        match websocket_close_with_code(handle, 4000, "Reconnecting")
+            Ok(closed) => assert(true)
+            Err(error) => assert(true)
+        "close"
+    else
+        "continue"
+    let result = [action, json_serialize(step.state)]
+    result
+
+fn discord_gateway_url(base: string) -> string
+    let suffix = if nerv.string.ends_with(base, "/") == 1
+        "?v=10&encoding=json"
+    else
+        "/?v=10&encoding=json"
+    nerv.string.concat(base, suffix)
+
+fn discord_run(token: string, intents: i64, handler:fn(i64, string, string, []u8, string) -> []string) -> Result<bool, DiscordError>
+    match discord_request("GET", "/gateway/bot", token, json_null(), 10000)
+        Err(error) => Err(error)
+        Ok(gateway) => discord_connect(gateway, token, intents, handler)
+
+fn discord_connect(gateway: Json, token: string, intents: i64, handler:fn(i64, string, string, []u8, string) -> []string) -> Result<bool, DiscordError>
+    let base = discord_text(gateway, "url")
+    let limit = json_i64(discord_field(discord_field(gateway, "session_start_limit"), "remaining"), 0)
+    if nerv.string.starts_with(base, "wss://") == 0 or limit < 1
+        Err(DiscordError { message: "Gateway unavailable or session start limit exhausted", status: 0, retry_ms: 0 })
+    else
+        let mut state = discord_state(token, intents)
+        let mut attempts = 0
+        let mut remaining = limit
+        let mut running = true
+        let mut fatal = false
+        while running and attempts < 8 and (remaining > 0 or nerv.string.len(discord_text(state, "session")) > 0)
+            let resume = discord_text(state, "resume_url")
+            let url = if nerv.string.len(discord_text(state, "session")) > 0 and nerv.string.starts_with(resume, "wss://") == 1
+                resume
+            else
+                base
+            if nerv.string.len(discord_text(state, "session")) == 0
+                remaining = remaining - 1
+            else
+                assert(true)
+            state = discord_put(state, "interval", json_integer(0))
+            state = discord_put(state, "ready", json_boolean(false))
+            state = discord_put(state, "retry_delay", json_integer(0))
+            let outcome = websocket_run(discord_gateway_url(url), json_serialize(state), 100, handler)
+            state = result_or(json_parse(outcome.state), state)
+            fatal = json_bool(discord_field(state, "fatal"), false)
+            attempts = attempts + 1
+            running = not fatal
+            if running and attempts < 8
+                let delay = json_i64(discord_field(state, "retry_delay"), 0)
+                sleep_ms(5000 * attempts + delay + random_below(1000))
+            else
+                assert(true)
+        let message = if fatal
+            "Discord closed the Gateway: check token, intents, and application configuration"
+        else
+            "Gateway reconnect budget exhausted; restart the bot to retry"
+        Err(DiscordError { message: message, status: 0, retry_ms: 0 })

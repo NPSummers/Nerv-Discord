@@ -1,0 +1,47 @@
+import nerv.net
+
+struct DiscordError
+    message: string
+    status: i64
+    retry_ms: i64
+
+fn discord_field(value: Json, key: string) -> Json
+    result_or(json_get(value, key), json_null())
+
+fn discord_text(value: Json, key: string) -> string
+    json_text(discord_field(value, key), "")
+
+fn discord_put(value: Json, key: string, member: Json) -> Json
+    let result = json_set(value, key, member)
+    match result
+        Ok(next) => next
+        Err(error) => json_null()
+
+fn discord_envelope(op: i64, data: Json) -> Json
+    discord_put(discord_put(json_object(), "op", json_integer(op)), "d", data)
+
+fn discord_command(name: string, description: string) -> Json
+    discord_put(discord_put(discord_put(json_object(), "name", json_string(name)), "description", json_string(description)), "type", json_integer(1))
+
+fn discord_message(content: string) -> Json
+    let data = discord_put(json_object(), "content", json_string(content))
+    discord_put(discord_put(json_object(), "type", json_integer(4)), "data", data)
+
+fn discord_decimal(value: string) -> bool
+    let mut valid = nerv.string.len(value) > 0
+    for i in 0 .. nerv.string.len(value)
+        if nerv.string.char_at(value, i) < 48 or nerv.string.char_at(value, i) > 57
+            valid = false
+        else
+            assert(true)
+    valid
+
+fn discord_route_token(value: string) -> bool
+    let mut valid = nerv.string.len(value) > 0 and nerv.string.len(value) < 512
+    for i in 0 .. nerv.string.len(value)
+        let ch = nerv.string.char_at(value, i)
+        if not ((ch >= 65 and ch <= 90) or (ch >= 97 and ch <= 122) or (ch >= 48 and ch <= 57) or ch == 45 or ch == 95 or ch == 46)
+            valid = false
+        else
+            assert(true)
+    valid

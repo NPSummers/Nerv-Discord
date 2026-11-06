@@ -1,0 +1,35 @@
+import discord
+
+fn mock_command(interaction: Json) -> string => ""
+
+fn mock_handler(handle: i64, kind: string, text: string, bytes: []u8, state: string) -> []string
+    discord_handle(handle, kind, text, bytes, state, mock_command)
+
+fn main() -> i64
+    let args = arguments()
+    let first = websocket_run(args [1], json_serialize(discord_state("dummy-token", 0)), 20, mock_handler)
+    assert_string_equal(first.error, "")
+    let state = result_or(json_parse(first.state), json_null())
+    assert_string_equal(discord_text(state, "session"), "mock-session")
+    assert(json_i64(discord_field(state, "seq"), 0) == 42)
+    let reset = discord_put(state, "interval", json_integer(0))
+    let second = websocket_run(args [1], json_serialize(reset), 20, mock_handler)
+    assert_string_equal(second.error, "")
+    let final_state = result_or(json_parse(second.state), json_null())
+    assert(json_bool(discord_field(final_state, "fatal"), false))
+    for status in 0 .. 5
+        let route = nerv.string.concat(args [2], json_serialize(json_integer(status)))
+        let response = http_request("POST", route, ["Content-Type", "application/json"], json_serialize(discord_command("ping", "Test command")), 2000)
+        let valid = match response
+            Ok(value) => mock_rest(value, status)
+            Err(error) => false
+        assert(valid)
+    0
+
+fn mock_rest(response: HttpResponse, index: i64) -> bool
+    match discord_response(response)
+        Ok(value) => index == 0
+        Err(error) => if index == 3
+            error.status == 429 and error.retry_ms == 1251
+        else
+            error.status >= 400 and index > 0
